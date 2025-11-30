@@ -28,12 +28,13 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         git clone -q --depth 1 --branch "$tag" "$url" "$TMP/$name" || exit 1
     fi
     
-    # Use RELATIVE symlinks (survive the mv rename)
-    find "$TMP/$name" -maxdepth 2 -not -path '*/.git/*' -type f -executable -print0 2>/dev/null | \
-    while IFS= read -r -d '' f; do
-        rel_path="../${f#"$TMP/"}"
-        ln -sf "$rel_path" "$TMP/bin/$(basename "$f")"
-    done
+    if [[ -d "$TMP/$name/bin" ]]; then
+        find "$TMP/$name/bin" -maxdepth 1 -type f -executable -print0 2>/dev/null | \
+        while IFS= read -r -d '' f; do
+            rel_path="../${f#"$TMP/"}"
+            ln -sf "$rel_path" "$TMP/bin/$(basename "$f")"
+        done
+    fi
 done < "$REQS"
 
 rm -rf "$DEST"

@@ -31,7 +31,7 @@ git@gitlab.com:org/private.git@v2.0.0
 2. Clones each repo to `.reporeq.tmp/`
 3. If ALL succeed → atomic move to `.reporeq/`
 4. If ANY fail → abort, nothing changes
-5. Links executables to `.reporeq/bin/`
+5. Links repo `bin/` executables to `.reporeq/bin/`
 
 ## Overlay Feature
 
@@ -66,7 +66,7 @@ Works on:
 
 ## Security Note
 
-All executable files in cloned repos are shimmed to `bin/`. Only clone repos you trust. Avoid repos with scripts named `ls`, `cd`, `test`, etc. that could shadow system commands.
+Only executables in each repo's `bin/` directory are shimmed. This reduces the risk of shadowing system commands. Still, only clone repos you trust. Avoid repos with scripts named `ls`, `cd`, `test`, etc. that could shadow system commands.
 
 ## License
 
