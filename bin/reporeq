@@ -29,8 +29,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
     
     if [[ -d "$TMP/$name/bin" ]]; then
-        find "$TMP/$name/bin" -maxdepth 1 -type f -executable -print0 2>/dev/null | \
+        find "$TMP/$name/bin" -maxdepth 1 -type f -print0 2>/dev/null | \
         while IFS= read -r -d '' f; do
+            [[ -x "$f" ]] || continue
             rel_path="../${f#"$TMP/"}"
             ln -sf "$rel_path" "$TMP/bin/$(basename "$f")"
         done
