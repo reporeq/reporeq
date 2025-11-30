@@ -17,7 +17,7 @@ jobs:
     - name: Run reporeq on itself
       run: |
         cd bin/
-        bash reporeq ../example.txt
+        ./reporeq ../example.txt
         
     - name: Verify .reporeq directory exists
       run: |
