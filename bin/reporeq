@@ -1,57 +1,73 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # reporeq - The simplest and last package manager you will ever use
-# Usage: ./reporeq [reporeq.txt]
+# Usage: ./reporeq [requirements-file]
 
 set -euo pipefail
 
-readonly REQS="${1:-reporeq.txt}"
-readonly DEST=".reporeq"
-readonly TMP="$(mktemp -d -p .)"
+readonly REQUIREMENTS_FILE="${1:-reporeq.txt}"
+readonly INSTALL_DIR=".reporeq"
 
-if [[ ! -f "$REQS" ]]; then
-    echo "Error: $REQS not found" >&2
+if [[ ! -f "$REQUIREMENTS_FILE" ]]; then
+    echo "Error: Requirements file '$REQUIREMENTS_FILE' not found" >&2
     exit 1
 fi
 
-mkdir -p "$TMP/bin"
+readonly TEMP_DIR="$(mktemp -d -p .)"
+
+mkdir -p "$TEMP_DIR/bin"
 
 while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" == \#* ]] && continue
 
     url="$line"
-    tag="$line"
+    ref=""
 
     if [[ "$line" == *@* ]]; then
         url="${line%@*}"
-        tag="${line##*@}"
-        if [[ "$tag" == */* || "$tag" == *:* ]]; then
+        ref="${line##*@}"
+        if [[ "$ref" == */* || "$ref" == *:* ]]; then
             url="$line"
-            tag="$line"
+            ref=""
         fi
     fi
 
-    name=$(basename "${url%.git}")
-    rm -rf "${TMP:?}/$name"
+    repo_name="$(basename "$url" .git)"
+    dest="$TEMP_DIR/$repo_name"
 
-    if [[ "$url" == "$tag" ]]; then
-        echo ":: $name @ HEAD"
-        git clone -q "$url" "$TMP/$name" || exit 1
+    rm -rf "$dest"
+
+    if [[ -z "$ref" ]]; then
+        echo ":: $repo_name @ HEAD"
+        if ! git clone --quiet --depth 1 "$url" "$dest"; then
+            echo "Error: Failed to clone $url" >&2
+            rm -rf "$TEMP_DIR"
+            exit 1
+        fi
     else
-        echo ":: $name @ $tag"
-        git clone -q "$url" "$TMP/$name" || exit 1
-        git -C "$TMP/$name" checkout -q "$tag" || exit 1
+        echo ":: $repo_name @ $ref"
+        if ! git clone --quiet "$url" "$dest"; then
+            echo "Error: Failed to clone $url" >&2
+            rm -rf "$TEMP_DIR"
+            exit 1
+        fi
+        if ! git -C "$dest" checkout --quiet "$ref"; then
+            echo "Error: Failed to checkout $ref for $repo_name" >&2
+            rm -rf "$TEMP_DIR"
+            exit 1
+        fi
     fi
 
-    if [[ -d "$TMP/$name/bin" ]]; then
-        for f in "$TMP/$name/bin"/*; do
-            [[ -x "$f" && -f "$f" ]] || continue
-            ln -sf "../${f#"$TMP/"}" "$TMP/bin/$(basename "$f")"
+    if [[ -d "$dest/bin" ]]; then
+        for exe in "$dest/bin"/*; do
+            if [[ -x "$exe" && -f "$exe" ]]; then
+                ln -sf "../$repo_name/bin/$(basename "$exe")" "$TEMP_DIR/bin/$(basename "$exe")"
+            fi
         done
     fi
-done < "$REQS"
+done < "$REQUIREMENTS_FILE"
 
-rm -rf "$DEST"
-mv "$TMP" "$DEST"
+rm -rf "$INSTALL_DIR"
+mv "$TEMP_DIR" "$INSTALL_DIR"
 
-echo ":: Done. PATH: export PATH=\"\$PWD/$DEST/bin:\$PATH\""
+echo ":: Done. PATH: export PATH=\"\$PWD/$INSTALL_DIR/bin:\$PATH\""
