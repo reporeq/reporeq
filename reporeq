@@ -1,0 +1,43 @@
+#!/bin/bash
+# reporeq - Clone git repos from a requirements file
+# Usage: ./reporeq [reporeq.txt]
+set -euo pipefail
+
+REQS="${1:-reporeq.txt}"
+DEST=".reporeq"
+TMP=".reporeq.tmp.$$"
+
+[[ -f "$REQS" ]] || { echo "Error: $REQS not found"; exit 1; }
+
+mkdir -p "$TMP/bin"
+trap 'rm -rf "$TMP"' EXIT
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    url="${line%@*}"
+    tag="${line#*@}"
+    name=$(basename "${url%.git}")
+    
+    rm -rf "$TMP/$name"
+    
+    if [[ "$url" == "$tag" ]]; then
+        echo ":: $name @ HEAD"
+        git clone -q --depth 1 "$url" "$TMP/$name" || exit 1
+    else
+        echo ":: $name @ $tag"
+        git clone -q --depth 1 --branch "$tag" "$url" "$TMP/$name" || exit 1
+    fi
+    
+    # Use RELATIVE symlinks (survive the mv rename)
+    find "$TMP/$name" -maxdepth 2 -not -path '*/.git/*' -type f -executable -print0 2>/dev/null | \
+    while IFS= read -r -d '' f; do
+        rel_path="../${f#"$TMP/"}"
+        ln -sf "$rel_path" "$TMP/bin/$(basename "$f")"
+    done
+done < "$REQS"
+
+rm -rf "$DEST"
+mv "$TMP" "$DEST"
+trap - EXIT
+
+echo ":: Done. PATH: export PATH=\"\$PWD/$DEST/bin:\$PATH\""
