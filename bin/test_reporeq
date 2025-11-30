@@ -1,94 +1,136 @@
 #!/usr/bin/env bash
-# Unit tests for reporeq parse_line function
+# Tests for reporeq
 
 set -euo pipefail
 
-# shellcheck source=./reporeq
-source "$(dirname "$0")/reporeq"
+cd "$(dirname "$0")"
 
-PASS=0
-FAIL=0
+# shellcheck source=bin/reporeq
+source "./reporeq"
+
+PASS=0 FAIL=0
+
+pass() { echo "✓ $*"; PASS=$((PASS + 1)); }
+fail() { echo "✗ $*"; FAIL=$((FAIL + 1)); }
 
 test_parse() {
-    local input="$1"
-    local expected_url="$2"
-    local expected_ref="$3"
-
+    local input="$1" expected_url="$2" expected_ref="$3"
     parse_line "$input"
-
     if [[ "$PARSE_URL" == "$expected_url" && "$PARSE_REF" == "$expected_ref" ]]; then
-        echo "✓ $input"
-        PASS=$((PASS + 1))
+        pass "$input"
     else
-        echo "✗ $input"
+        fail "$input"
         echo "  expected: url='$expected_url' ref='$expected_ref'"
         echo "  got:      url='$PARSE_URL' ref='$PARSE_REF'"
-        FAIL=$((FAIL + 1))
     fi
 }
 
-echo "=== Testing parse_line ==="
+cleanup_test() { rm -rf .reporeq test.txt; }
+
+echo "=== Unit tests: parse_line ==="
 echo
 
-# Basic URL without ref
-test_parse "https://github.com/user/repo" \
-           "https://github.com/user/repo" ""
+# HTTPS URLs
+test_parse "https://github.com/user/repo" "https://github.com/user/repo" ""
+test_parse "https://github.com/user/repo@v1.0.0" "https://github.com/user/repo" "v1.0.0"
+test_parse "https://github.com/user/repo@abc123def" "https://github.com/user/repo" "abc123def"
+test_parse "https://github.com/user/repo@feature/branch" "https://github.com/user/repo" "feature/branch"
+test_parse "https://github.com/user/repo@feature/sub/branch" "https://github.com/user/repo" "feature/sub/branch"
+test_parse "https://github.com/user/repo.git@main" "https://github.com/user/repo.git" "main"
 
-# URL with simple tag
-test_parse "https://github.com/user/repo@v1.0.0" \
-           "https://github.com/user/repo" "v1.0.0"
+# SSH URLs
+test_parse "git@github.com:user/repo.git" "git@github.com:user/repo.git" ""
+test_parse "git@github.com:user/repo.git@v2.0.0" "git@github.com:user/repo.git" "v2.0.0"
+test_parse "git@gitlab.com:org/repo.git@develop/feature" "git@gitlab.com:org/repo.git" "develop/feature"
 
-# URL with SHA
-test_parse "https://github.com/user/repo@abc123def" \
-           "https://github.com/user/repo" "abc123def"
+# URLs with basic auth
+test_parse "https://user:pass@github.com/org/repo" "https://user:pass@github.com/org/repo" ""
+test_parse "https://user:pass@github.com/org/repo@v1.0.0" "https://user:pass@github.com/org/repo" "v1.0.0"
+test_parse "https://token:x-oauth@github.com/org/repo@feature/branch" "https://token:x-oauth@github.com/org/repo" "feature/branch"
+test_parse "https://token@github.com/org/repo@main" "https://token@github.com/org/repo" "main"
 
-# URL with branch containing slash
-test_parse "https://github.com/user/repo@feature/branch" \
-           "https://github.com/user/repo" "feature/branch"
+echo
+echo "=== Integration tests ==="
+echo
 
-# URL with branch containing multiple slashes
-test_parse "https://github.com/user/repo@feature/sub/branch" \
-           "https://github.com/user/repo" "feature/sub/branch"
+# Test basic clone
+cleanup_test
+echo "https://github.com/reporeq/reporeq" > test.txt
+./reporeq test.txt
+if [[ -d ".reporeq/reporeq" ]]; then
+    pass "Basic clone works"
+else
+    fail "Basic clone failed"
+fi
+cleanup_test
 
-# SSH URL without ref (has @ in URL itself)
-test_parse "git@github.com:user/repo.git" \
-           "git@github.com:user/repo.git" ""
+# Test SHA checkout
+echo "https://github.com/reporeq/reporeq@35316e9e99c4de8ccbda37950766a4aa707932f2" > test.txt
+./reporeq test.txt
+actual_sha=$(git -C .reporeq/reporeq rev-parse HEAD)
+expected="35316e9e99c4de8ccbda37950766a4aa707932f2"
+if [[ "$actual_sha" == "$expected" ]]; then
+    pass "SHA checkout works: $actual_sha"
+else
+    fail "SHA mismatch: expected $expected, got $actual_sha"
+fi
+cleanup_test
 
-# SSH URL with tag
-test_parse "git@github.com:user/repo.git@v2.0.0" \
-           "git@github.com:user/repo.git" "v2.0.0"
+# Test comments and empty lines
+cat > test.txt << 'EOF'
+# This is a comment
 
-# SSH URL with branch containing slash
-test_parse "git@gitlab.com:org/repo.git@develop/feature" \
-           "git@gitlab.com:org/repo.git" "develop/feature"
+https://github.com/reporeq/reporeq
+# Another comment
 
-# URL ending with .git
-test_parse "https://github.com/user/repo.git@main" \
-           "https://github.com/user/repo.git" "main"
+EOF
+./reporeq test.txt
+if [[ -d ".reporeq/reporeq" ]]; then
+    pass "Comments/empty lines handled correctly"
+else
+    fail "Comments/empty lines not handled"
+fi
+cleanup_test
 
-# HTTP URL with basic auth (user:pass@host) - NO ref
-test_parse "https://user:pass@github.com/org/repo" \
-           "https://user:pass@github.com/org/repo" ""
+# Test overlay feature
+cat > test.txt << 'EOF'
+https://github.com/reporeq/reporeq@35316e9e99c4de8ccbda37950766a4aa707932f2
+https://github.com/reporeq/reporeq
+EOF
+./reporeq test.txt
+actual_sha=$(git -C .reporeq/reporeq rev-parse HEAD)
+first_sha="35316e9e99c4de8ccbda37950766a4aa707932f2"
+if [[ "$actual_sha" != "$first_sha" ]]; then
+    pass "Overlay works: later entry overwrote earlier"
+else
+    fail "Overlay failed: should have HEAD, got first SHA"
+fi
+cleanup_test
 
-# HTTP URL with basic auth AND ref
-test_parse "https://user:pass@github.com/org/repo@v1.0.0" \
-           "https://user:pass@github.com/org/repo" "v1.0.0"
+# Test failure on invalid URL
+echo "https://github.com/this-repo-does-not-exist-12345/invalid" > test.txt
+if ./reporeq test.txt 2>/dev/null; then
+    fail "Should have failed on invalid URL"
+elif [[ -d ".reporeq" ]]; then
+    fail ".reporeq should not exist after failure"
+else
+    pass "Invalid URL correctly fails without leaving partial state"
+fi
+rm -f test.txt
 
-# HTTP URL with basic auth AND ref with slash
-test_parse "https://token:x-oauth@github.com/org/repo@feature/branch" \
-           "https://token:x-oauth@github.com/org/repo" "feature/branch"
-
-# HTTP URL without auth, no ref
-test_parse "https://github.com/user/repo" \
-           "https://github.com/user/repo" ""
-
-# HTTP URL with just username (no password)
-test_parse "https://token@github.com/org/repo@main" \
-           "https://token@github.com/org/repo" "main"
+# Test bin symlinks
+./reporeq ../example.txt
+if [[ -d ".reporeq/bin" ]]; then
+    if [[ -L ".reporeq/bin/reporeq" ]] || [[ -f ".reporeq/bin/reporeq" ]]; then
+        pass "Bin symlinks created correctly"
+    else
+        fail "reporeq symlink not found in .reporeq/bin/"
+    fi
+else
+    fail ".reporeq/bin/ directory not found"
+fi
+cleanup_test
 
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
-
-if [[ $FAIL -gt 0 ]]; then
-    exit 1
-fi
+[[ $FAIL -eq 0 ]]

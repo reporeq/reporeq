@@ -54,9 +54,7 @@ export PATH="$PWD/.reporeq/bin:$PATH"
 
 ## Philosophy
 
-Git already handles versioning, distribution, and history. Package managers reinvented all of this. This script just uses git directly.
-
-<100 lines. No dependencies beyond git and bash.
+Git already handles versioning, distribution, and history. Package managers reinvented all of this. This script just uses git directly. No dependencies beyond git and bash.
 
 ## Cross-Platform
 

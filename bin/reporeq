@@ -4,46 +4,53 @@
 
 set -euo pipefail
 
-# Parse a line into url and ref
-# Usage: parse_line "https://github.com/user/repo@v1.0.0"
-# Sets: PARSE_URL, PARSE_REF
+readonly DEFAULT_REQUIREMENTS_FILE="reporeq.txt"
+readonly DEFAULT_INSTALL_DIR=".reporeq"
+
+# Global state
+TEMP_DIR=""
+PARSE_URL=""
+PARSE_REF=""
+
+log_info()    { echo ":: $*"; }
+log_success() { echo ":: $*"; }
+log_error()   { echo "Error: $*" >&2; }
+
+cleanup() { [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]] && rm -rf "$TEMP_DIR"; true; }
+
+# Parse line into PARSE_URL and PARSE_REF globals
 parse_line() {
-    local line="$1"
+    local line="$1" path_part
     PARSE_URL="$line"
     PARSE_REF=""
 
-    # Handle SSH URLs (git@host:path) - split only on @ after the path
+    # SSH URLs: git@host:path[@ref]
     if [[ "$line" =~ ^git@[^:]+: ]]; then
-        # SSH URL: git@host:org/repo[@ref]
-        local path_part="${line#*:}"
+        path_part="${line#*:}"
         if [[ "$path_part" == *@* ]]; then
             PARSE_REF="${path_part##*@}"
             PARSE_URL="${line%@*}"
         fi
-        return
+        return 0
     fi
 
-    # Handle HTTP(S) URLs - may contain user:pass@host
+    # HTTP(S) URLs: https://[user:pass@]host/path[@ref]
     if [[ "$line" =~ ^https?:// ]]; then
-        # Strip protocol to find path
         local without_proto="${line#*://}"
-        # Find path after host (first /)
         if [[ "$without_proto" == */* ]]; then
-            local path_part="${without_proto#*/}"
-            # Look for @ only in path part (after first /)
+            path_part="${without_proto#*/}"
             if [[ "$path_part" == *@* ]]; then
                 PARSE_REF="${path_part##*@}"
                 PARSE_URL="${line%@*}"
             fi
         fi
-        return
+        return 0
     fi
 
-    # Fallback for other URL schemes
+    # Fallback: split on @ unless ref contains colon
     if [[ "$line" == *@* ]]; then
         PARSE_URL="${line%@*}"
         PARSE_REF="${line##*@}"
-        # Reset if ref contains colon (likely part of URL)
         if [[ "$PARSE_REF" == *:* ]]; then
             PARSE_URL="$line"
             PARSE_REF=""
@@ -51,78 +58,74 @@ parse_line() {
     fi
 }
 
+clone_repo() {
+    local url="$1" dest="$2" ref="${3:-}"
+
+    if [[ -z "$ref" ]]; then
+        git clone --quiet --depth 1 "$url" "$dest"
+    elif git clone --quiet --depth 1 --branch "$ref" "$url" "$dest" 2>/dev/null; then
+        return 0
+    else
+        git clone --quiet "$url" "$dest" && git -C "$dest" checkout --quiet "$ref"
+    fi
+}
+
+link_executables() {
+    local dest="$1" repo_name="$2" bin_dir="$3"
+    [[ -d "$dest/bin" ]] || return 0
+    for exe in "$dest/bin"/*; do
+        [[ -x "$exe" && -f "$exe" ]] && ln -sf "../$repo_name/bin/${exe##*/}" "$bin_dir/${exe##*/}"
+    done
+}
+
+remove_repo_symlinks() {
+    local bin_dir="$1" repo_name="$2"
+    for link in "$bin_dir"/*; do
+        [[ -L "$link" && "$(readlink "$link")" == "../$repo_name/"* ]] && rm -f "$link"
+    done 2>/dev/null || true
+}
+
+process_repo() {
+    local url="$1" ref="${2:-}" temp_dir="$3"
+    local repo_name dest
+    repo_name="$(basename "$url" .git)"
+    dest="$temp_dir/$repo_name"
+
+    log_info "$repo_name @ ${ref:-HEAD}"
+
+    remove_repo_symlinks "$temp_dir/bin" "$repo_name"
+    rm -rf "$dest"
+
+    if ! clone_repo "$url" "$dest" "$ref"; then
+        log_error "Failed to clone $url${ref:+ at $ref}"
+        return 1
+    fi
+
+    link_executables "$dest" "$repo_name" "$temp_dir/bin"
+}
+
 # Allow sourcing for testing
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    return 0
-fi
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
 
-readonly REQUIREMENTS_FILE="${1:-reporeq.txt}"
-readonly INSTALL_DIR=".reporeq"
+trap cleanup EXIT
 
-if [[ ! -f "$REQUIREMENTS_FILE" ]]; then
-    echo "Error: Requirements file '$REQUIREMENTS_FILE' not found" >&2
-    exit 1
-fi
+readonly REQUIREMENTS_FILE="${1:-$DEFAULT_REQUIREMENTS_FILE}"
+readonly INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+
+[[ -f "$REQUIREMENTS_FILE" ]] || { log_error "Requirements file '$REQUIREMENTS_FILE' not found"; exit 1; }
 
 TEMP_DIR="$(mktemp -d -p .)"
-readonly TEMP_DIR
-
 mkdir -p "$TEMP_DIR/bin"
 
 while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" == \#* ]] && continue
-
     parse_line "$line"
-    url="$PARSE_URL"
-    ref="$PARSE_REF"
-
-    repo_name="$(basename "$url" .git)"
-    dest="$TEMP_DIR/$repo_name"
-
-    # Clean up existing symlinks pointing to this repo (overlay support)
-    for link in "$TEMP_DIR/bin"/*; do
-        if [[ -L "$link" ]]; then
-            target="$(readlink "$link")"
-            if [[ "$target" == "../$repo_name/"* ]]; then
-                rm -f "$link"
-            fi
-        fi
-    done 2>/dev/null || true
-
-    rm -rf "$dest"
-
-    if [[ -z "$ref" ]]; then
-        echo ":: $repo_name @ HEAD"
-        if ! git clone --quiet --depth 1 "$url" "$dest"; then
-            echo "Error: Failed to clone $url" >&2
-            rm -rf "$TEMP_DIR"
-            exit 1
-        fi
-    else
-        echo ":: $repo_name @ $ref"
-        if ! git clone --quiet "$url" "$dest"; then
-            echo "Error: Failed to clone $url" >&2
-            rm -rf "$TEMP_DIR"
-            exit 1
-        fi
-        if ! git -C "$dest" checkout --quiet "$ref"; then
-            echo "Error: Failed to checkout $ref for $repo_name" >&2
-            rm -rf "$TEMP_DIR"
-            exit 1
-        fi
-    fi
-
-    if [[ -d "$dest/bin" ]]; then
-        for exe in "$dest/bin"/*; do
-            if [[ -x "$exe" && -f "$exe" ]]; then
-                ln -sf "../$repo_name/bin/$(basename "$exe")" "$TEMP_DIR/bin/$(basename "$exe")"
-            fi
-        done
-    fi
+    process_repo "$PARSE_URL" "$PARSE_REF" "$TEMP_DIR" || exit 1
 done < "$REQUIREMENTS_FILE"
 
 rm -rf "$INSTALL_DIR"
 mv "$TEMP_DIR" "$INSTALL_DIR"
+TEMP_DIR=""
 
-echo ":: Done. PATH: export PATH=\"\$PWD/$INSTALL_DIR/bin:\$PATH\""
+log_success "Done. Add to PATH: export PATH=\"\$PWD/$INSTALL_DIR/bin:\$PATH\""
