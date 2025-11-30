@@ -32,7 +32,7 @@ jobs:
 
       - name: Run shellcheck
         if: runner.os == 'Linux'
-        run: shellcheck reporeq test_reporeq
+        run: shellcheck -x reporeq test_reporeq
 
       - name: Run tests
         run: ./test_reporeq

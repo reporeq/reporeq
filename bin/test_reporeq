@@ -5,7 +5,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# shellcheck source=bin/reporeq
+# shellcheck source=./reporeq
 source "./reporeq"
 
 PASS=0 FAIL=0
