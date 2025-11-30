@@ -29,7 +29,7 @@ git@gitlab.com:org/private.git@v2.0.0
 ## What It Does
 
 1. Reads file line by line (order matters!)
-2. Clones each repo to `.reporeq.tmp/`
+2. Clones each repo to a temp directory
 3. If ALL succeed → atomic move to `.reporeq/`
 4. If ANY fail → abort, nothing changes
 5. Links repo `bin/` executables to `.reporeq/bin/`
